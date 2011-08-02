@@ -6,6 +6,11 @@ lib/Function/Parameters.pm
 t/pod.t
 t/00-load.t
 t/01-compiles.t
+t/02-compiles.t
 t/elsewhere.t
 t/rename.t
-META.yml                                 Module meta-data (added by MakeMaker)
+t/eating_strict_error.t
+t/eating_strict_error.fail
+t/eating_strict_error_2.fail
+META.yml                                 Module YAML meta-data (added by MakeMaker)
+META.json                                Module JSON meta-data (added by MakeMaker)

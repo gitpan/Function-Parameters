@@ -1,27 +1,27 @@
---- #YAML:1.0
-name:               Function-Parameters
-version:            0.04
-abstract:           subroutine definitions with parameter lists
+---
+abstract: 'subroutine definitions with parameter lists'
 author:
-    - Lukas Mai <l.mai@web.de>
-license:            perl
-distribution_type:  module
-configure_requires:
-    ExtUtils::MakeMaker:  0
+  - 'Lukas Mai <l.mai@web.de>'
 build_requires:
-    ExtUtils::MakeMaker:  0
-requires:
-    B::Compiling:         0
-    B::Hooks::EndOfScope:  0
-    Devel::Declare:       0
-    strict:               0
-    Test::More:           0
-    warnings:             0
-no_index:
-    directory:
-        - t
-        - inc
-generated_by:       ExtUtils::MakeMaker version 6.56
+  Dir::Self: 0
+configure_requires:
+  ExtUtils::MakeMaker: 0
+dynamic_config: 1
+generated_by: 'ExtUtils::MakeMaker version 6.58, CPAN::Meta::Converter version 2.110930001'
+license: perl
 meta-spec:
-    url:      http://module-build.sourceforge.net/META-spec-v1.4.html
-    version:  1.4
+  url: http://module-build.sourceforge.net/META-spec-v1.4.html
+  version: 1.4
+name: Function-Parameters
+no_index:
+  directory:
+    - t
+    - inc
+requires:
+  B::Hooks::EndOfScope: 0
+  Carp: 0
+  Devel::Declare: 0
+  Test::More: 0
+  strict: 0
+  warnings: 0
+version: 0.05
