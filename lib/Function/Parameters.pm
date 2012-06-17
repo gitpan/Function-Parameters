@@ -1,11 +1,13 @@
 package Function::Parameters;
 
+use v5.14.0;
+
 use strict;
 use warnings;
 
 use XSLoader;
 BEGIN {
-	our $VERSION = '0.05_01';
+	our $VERSION = '0.05_02';
 	XSLoader::load;
 }
 
