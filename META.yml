@@ -19,11 +19,10 @@ no_index:
     - t
     - inc
 requires:
-  B::Hooks::EndOfScope: 0
   Carp: 0
   XSLoader: 0
   bytes: 0
   perl: 5.014000
   strict: 0
   warnings: 0
-version: 0.05_02
+version: 0.05_03

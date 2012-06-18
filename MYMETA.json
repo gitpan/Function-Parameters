@@ -33,7 +33,6 @@
       },
       "runtime" : {
          "requires" : {
-            "B::Hooks::EndOfScope" : "0",
             "Carp" : "0",
             "XSLoader" : "0",
             "bytes" : "0",
@@ -44,5 +43,5 @@
       }
    },
    "release_status" : "testing",
-   "version" : "0.05_02"
+   "version" : "0.05_03"
 }
