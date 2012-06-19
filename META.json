@@ -35,13 +35,12 @@
          "requires" : {
             "Carp" : "0",
             "XSLoader" : "0",
-            "bytes" : "0",
             "perl" : "5.014000",
             "strict" : "0",
             "warnings" : "0"
          }
       }
    },
-   "release_status" : "testing",
-   "version" : "0.05_03"
+   "release_status" : "stable",
+   "version" : "0.06"
 }

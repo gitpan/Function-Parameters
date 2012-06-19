@@ -7,12 +7,11 @@ use warnings;
 
 use XSLoader;
 BEGIN {
-	our $VERSION = '0.05_03';
+	our $VERSION = '0.06';
 	XSLoader::load;
 }
 
 use Carp qw(confess);
-use bytes ();
 
 sub _assert_valid_identifier {
 	my ($name, $with_dollar) = @_;
@@ -21,16 +20,34 @@ sub _assert_valid_identifier {
 		or confess qq{"$name" doesn't look like a valid identifier};
 }
 
+sub _assert_valid_attributes {
+	my ($attrs) = @_;
+	$attrs =~ /^\s*:\s*[^\W\d]\w*\s*(?:(?:\s|:\s*)[^\W\d]\w*\s*)*(?:\(|\z)/
+		or confess qq{"$attrs" doesn't look like valid attributes};
+}
+
 my @bare_arms = qw(function method);
 my %type_map = (
 	function => { name => 'optional' },
-	method   => { name => 'optional', shift => '$self' },
+	method   => {
+		name => 'optional',
+		shift => '$self',
+		attrs => ':method',
+	},
+	classmethod   => {
+		name => 'optional',
+		shift => '$class',
+		attrs => ':method',
+	},
 );
 
 sub import {
 	my $class = shift;
 
-	@_ or @_ = ('fun', 'method');
+	@_ or @_ = {
+		fun => 'function',
+		method => 'method',
+	};
 	if (@_ == 1 && ref($_[0]) eq 'HASH') {
 		@_ = map [$_, $_[0]{$_}], keys %{$_[0]}
 			or return;
@@ -44,30 +61,38 @@ sub import {
 			? $proto
 			: [$proto, $bare_arms[$bare++] || confess(qq{Don't know what to do with "$proto"})]
 		;
-		my ($name, $type) = @$item;
+		my ($name, $proto_type) = @$item;
 		_assert_valid_identifier $name;
 
-		unless (ref $type) {
-			# use '||' instead of 'or' to preserve $type in the error message
-			$type = $type_map{$type}
-				|| confess qq["$type" doesn't look like a valid type (one of ${\join ', ', sort keys %type_map})];
+		unless (ref $proto_type) {
+			# use '||' instead of 'or' to preserve $proto_type in the error message
+			$proto_type = $type_map{$proto_type}
+				|| confess qq["$proto_type" doesn't look like a valid type (one of ${\join ', ', sort keys %type_map})];
 		}
-		$type->{name} ||= 'optional';
-		$type->{name} =~ /^(?:optional|required|prohibited)\z/
-			or confess qq["$type->{name}" doesn't look like a valid name attribute (one of optional, required, prohibited)];
-		if ($type->{shift}) {
-			_assert_valid_identifier $type->{shift}, 1;
-			bytes::length($type->{shift}) < SHIFT_NAME_LIMIT
-				or confess qq["$type->{shift}" is longer than I can handle];
-		}
+
+		my %type = %$proto_type;
+		my %clean;
+
+		$clean{name} = delete $type{name} || 'optional';
+		$clean{name} =~ /^(?:optional|required|prohibited)\z/
+			or confess qq["$clean{name}" doesn't look like a valid name attribute (one of optional, required, prohibited)];
+
+		$clean{shift} = delete $type{shift} || '';
+		_assert_valid_identifier $clean{shift}, 1 if $clean{shift};
+
+		$clean{attrs} = delete $type{attrs} || '';
+		_assert_valid_attributes $clean{attrs} if $clean{attrs};
 		
-		$spec{$name} = $type;
+		%type and confess "Invalid keyword property: @{[keys %type]}";
+
+		$spec{$name} = \%clean;
 	}
 	
 	for my $kw (keys %spec) {
 		my $type = $spec{$kw};
 
-		$^H{HINTK_SHIFT_ . $kw} = $type->{shift} || '';
+		$^H{HINTK_SHIFT_ . $kw} = $type->{shift};
+		$^H{HINTK_ATTRS_ . $kw} = $type->{attrs};
 		$^H{HINTK_NAME_ . $kw} =
 			$type->{name} eq 'prohibited' ? FLAG_NAME_PROHIBITED :
 			$type->{name} eq 'required' ? FLAG_NAME_REQUIRED :
@@ -94,6 +119,8 @@ sub unimport {
 'ok'
 
 __END__
+
+=encoding UTF-8
 
 =head1 NAME
 
@@ -169,14 +196,15 @@ that you pass a hash reference in the import list:
 
  use Function::Parameters { proc => 'function', meth => 'method' }; # -or-
  use Function::Parameters { proc => 'function' }; # -or-
- use Function::Parameters { meth => 'method' };
+ use Function::Parameters { meth => 'method' }; # etc.
 
 The first line creates two keywords, C<proc> and C<meth> (for defining
 functions and methods, respectively). The last two lines only create one
 keyword. Generally the hash keys can be any identifiers you want while the
-values have to be either C<function>, C<method>, or a hash reference (see
-below). The difference between C<function> and C<method> is that C<method>s
-automatically L<shift|perlfunc/shift> their first argument into C<$self>.
+values have to be either C<function>, C<method>, C<classmethod> or a hash
+reference (see below). The difference between C<function> and C<method> is that
+C<method>s automatically L<shift|perlfunc/shift> their first argument into
+C<$self> (C<classmethod>s are similar but shift into C<$class>).
 
 The following shortcuts are available:
 
@@ -226,10 +254,30 @@ Valid values: strings that look like a scalar variable. Any function created by
 this keyword will automatically L<shift|perlfunc/shift> its first argument into
 a local variable whose name is specified here.
 
+=item C<attrs>
+
+Valid values: strings that are valid source code for attributes. Any value
+specified here will be inserted as a subroutine attribute in the generated
+code. Thus:
+
+ use Function::Parameters { sub_l => { attrs => ':lvalue' } };
+ sub_l foo() {
+   ...
+ }
+
+turns into
+
+ sub foo :lvalue {
+   ...
+ }
+
 =back
 
-Plain C<'function'> is equivalent to C<< { name => 'optional' } >>, and plain
-C<'method'> is equivalent to C<< { name => 'optional', shift => '$self' } >>.
+Plain C<'function'> is equivalent to C<< { name => 'optional' } >>, plain
+C<'method'> is equivalent to
+C<< { name => 'optional', shift => '$self', attrs => ':method' } >>, and plain
+C<'classmethod'> is equivalent to
+C<< { name => 'optional', shift => '$class', attrs => ':method' } >>.
 
 =head2 Syntax and generated code
 
