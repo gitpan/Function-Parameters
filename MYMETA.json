@@ -19,28 +19,13 @@
          "inc"
       ]
    },
-   "prereqs" : {
-      "build" : {
-         "requires" : {
-            "Dir::Self" : "0",
-            "Test::More" : "0"
-         }
-      },
-      "configure" : {
-         "requires" : {
-            "ExtUtils::MakeMaker" : "6.56"
-         }
-      },
-      "runtime" : {
-         "requires" : {
-            "Carp" : "0",
-            "XSLoader" : "0",
-            "perl" : "5.014000",
-            "strict" : "0",
-            "warnings" : "0"
-         }
+   "release_status" : "testing",
+   "resources" : {
+      "repository" : {
+         "type" : "git",
+         "url" : "git://git.shadowcat.co.uk/p5sagit/Function-Parameters",
+         "web" : "http://git.shadowcat.co.uk/gitweb/gitweb.cgi?p=p5sagit/Function-Parameters.git"
       }
    },
-   "release_status" : "stable",
-   "version" : "0.06"
+   "version" : "0.06_01"
 }
