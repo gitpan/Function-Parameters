@@ -31,6 +31,7 @@ t/named_3.fail
 t/named_4.fail
 t/pod.t
 t/precedence.t
+t/prototype.t
 t/regress.t
 t/rename.t
 t/strict.t
@@ -39,6 +40,6 @@ t/strict_2.fail
 t/strict_3.fail
 t/strict_4.fail
 t/strict_5.fail
-toke_on_crack.c.inc
+t/unicode.t
 META.yml                                 Module YAML meta-data (added by MakeMaker)
 META.json                                Module JSON meta-data (added by MakeMaker)
