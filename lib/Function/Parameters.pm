@@ -9,7 +9,7 @@ use Carp qw(confess);
 
 use XSLoader;
 BEGIN {
-	our $VERSION = '0.09';
+	our $VERSION = '0.10';
 	XSLoader::load;
 }
 
@@ -39,6 +39,7 @@ my %type_map = (
 		check_argument_count => 0,
 		attrs => ':method',
 		shift => '$self',
+		invocant => 1,
 	},
 	classmethod   => {
 		name => 'optional',
@@ -46,6 +47,7 @@ my %type_map = (
 		check_argument_count => 0,
 		attributes => ':method',
 		shift => '$class',
+		invocant => 1,
 	},
 );
 for my $k (keys %type_map) {
@@ -58,13 +60,20 @@ for my $k (keys %type_map) {
 sub import {
 	my $class = shift;
 
-	@_ or @_ = {
-		fun => 'function',
-		method => 'method',
-	};
+	if (!@_) {
+		@_ = {
+			fun => 'function',
+			method => 'method',
+		};
+	}
+	if (@_ == 1 && $_[0] eq ':strict') {
+		@_ = {
+			fun => 'function_strict',
+			method => 'method_strict',
+		};
+	}
 	if (@_ == 1 && ref($_[0]) eq 'HASH') {
-		@_ = map [$_, $_[0]{$_}], keys %{$_[0]}
-			or return;
+		@_ = map [$_, $_[0]{$_}], keys %{$_[0]};
 	}
 
 	my %spec;
@@ -103,6 +112,7 @@ sub import {
 			: 1
 		;
 		$clean{check_argument_count} = !!delete $type{check_argument_count};
+		$clean{invocant} = !!delete $type{invocant};
 
 		%type and confess "Invalid keyword property: @{[keys %type]}";
 
@@ -119,6 +129,7 @@ sub import {
 		;
 		$flags |= FLAG_DEFAULT_ARGS if $type->{default_arguments};
 		$flags |= FLAG_CHECK_NARGS if $type->{check_argument_count};
+		$flags |= FLAG_INVOCANT if $type->{invocant};
 		$^H{HINTK_FLAGS_ . $kw} = $flags;
 		$^H{HINTK_SHIFT_ . $kw} = $type->{shift};
 		$^H{HINTK_ATTRS_ . $kw} = $type->{attrs};
@@ -176,16 +187,37 @@ Function::Parameters - subroutine definitions with parameter lists
  method set_name($name) {
    $self->{name} = $name;
  }
-
+ 
+ # method with explicit invocant
+ method new($class: %init) {
+   return bless { %init }, $class;
+ }
+ 
  # function with default arguments
  fun search($haystack, $needle = qr/^(?!)/, $offset = 0) {
    ...
  }
-
+ 
  # method with default arguments
  method skip($amount = 1) {
    $self->{position} += $amount;
  }
+
+=cut
+
+=pod
+
+ use Function::Parameters qw(:strict);
+ 
+ fun greet($x) {
+   print "Hello, $x\n";
+ }
+ 
+ greet "foo", "bar";
+ # Dies at runtime with "Too many arguments for fun greet"
+ 
+ greet;
+ # Dies at runtime with "Not enough arguments for fun greet"
 
 =cut
 
@@ -206,11 +238,6 @@ Function::Parameters - subroutine definitions with parameter lists
 
 This module lets you use parameter lists in your subroutines. Thanks to
 L<PL_keyword_plugin|perlapi/PL_keyword_plugin> it works without source filters.
-
-WARNING: This is my first attempt at writing L<XS code|perlxs> and I have
-almost no experience with perl's internals. So while this module might
-appear to work, it could also conceivably make your programs segfault.
-Consider this module alpha quality.
 
 =head2 Basic stuff
 
@@ -267,6 +294,12 @@ The following shortcuts are available:
 
 =pod
 
+ use Function::Parameters ':strict';
+    # is equivalent to #
+ use Function::Parameters { fun => 'function_strict', method => 'method_strict' };
+
+=pod
+
 The following shortcuts are deprecated and may be removed from a future version
 of this module:
 
@@ -284,10 +317,10 @@ of this module:
    # is equivalent to #
  use Function::Parameters { 'foo' => 'function', 'bar' => 'method' };
 
-That is, if you want to pass arguments to L<Function::Parameters>, use a
-hashref, not a list of strings.
+That is, if you want to create custom keywords with L<Function::Parameters>,
+use a hashref, not a list of strings.
 
-You can customize the properties of the generated keywords even more by passing
+You can tune the properties of the generated keywords even more by passing
 a hashref instead of a string. This hash can have the following keys:
 
 =over
@@ -304,6 +337,17 @@ only be used for defining anonymous functions.
 Valid values: strings that look like a scalar variable. Any function created by
 this keyword will automatically L<shift|perlfunc/shift> its first argument into
 a local variable whose name is specified here.
+
+=item C<invocant>
+
+Valid values: booleans. This lets users of this keyword specify an explicit
+invocant, that is, the first parameter may be followed by a C<:> (colon)
+instead of a comma and will by initialized by shifting the first element off
+C<@_>.
+
+You can combine C<shift> and C<invocant>, in which case the variable named in
+C<shift> serves as a default shift target for functions that don't specify an
+explicit invocant.
 
 =item C<attributes>, C<attrs>
 
@@ -399,6 +443,7 @@ C<'method'> is equivalent to:
    check_argument_count => 0,
    attributes => ':method',
    shift => '$self',
+   invocant => 1,
  }
 
 C<'method_strict'> is like C<'method'> but with
@@ -412,6 +457,7 @@ C<'classmethod'> is equivalent to:
    check_argument_count => 0,
    attributes => ':method',
    shift => '$class',
+   invocant => 1,
  }
 
 C<'classmethod_strict'> is like C<'classmethod'> but with
@@ -441,9 +487,10 @@ with C<(>).
 
 As an example, the following declaration uses every available feature
 (subroutine name, parameter list, default arguments, prototype, default
-attributes, attributes, argument count checks, and implicit C<$self>):
+attributes, attributes, argument count checks, and implicit C<$self> overriden
+by an explicit invocant declaration):
 
- method foo($x, $y, $z = sqrt 5)
+ method foo($this: $x, $y, $z = sqrt 5)
    :($$$;$)
    :lvalue
    :Banana(2 + 2)
@@ -455,9 +502,9 @@ And here's what it turns into:
 
  sub foo ($$$;$) :method :lvalue :Banana(2 + 2) {
    sub foo ($$$;$);
-   Carp::croak "Not enough arguments for method foo" if @_ < 2;
+   Carp::croak "Not enough arguments for method foo" if @_ < 3;
    Carp::croak "Too many arguments for method foo" if @_ > 4;
-   my $self = shift;
+   my $this = shift;
    my ($x, $y, $z) = @_;
    $z = sqrt 5 if @_ < 3;
    ...
