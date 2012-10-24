@@ -19,7 +19,7 @@
          "inc"
       ]
    },
-   "release_status" : "stable",
+   "release_status" : "testing",
    "resources" : {
       "repository" : {
          "type" : "git",
@@ -27,5 +27,5 @@
          "web" : "http://git.shadowcat.co.uk/gitweb/gitweb.cgi?p=p5sagit/Function-Parameters.git"
       }
    },
-   "version" : "0.10"
+   "version" : "0.10_01"
 }
