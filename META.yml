@@ -16,4 +16,4 @@ no_index:
     - inc
 resources:
   repository: git://git.shadowcat.co.uk/p5sagit/Function-Parameters
-version: 0.10_02
+version: 0.10_03
