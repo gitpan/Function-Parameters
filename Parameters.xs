@@ -107,15 +107,55 @@ DEFSTRUCT(KWSpec) {
 
 static int (*next_keyword_plugin)(pTHX_ char *, STRLEN, OP **);
 
-static int kw_flags(pTHX_ const char *kw_ptr, STRLEN kw_len, KWSpec *spec) {
+DEFSTRUCT(Resource) {
+	Resource *next;
+	void *data;
+	void (*destroy)(pTHX_ void *);
+};
+
+typedef Resource *Sentinel[1];
+
+static void sentinel_clear_void(pTHX_ void *p) {
+	Resource **pp = p;
+	while (*pp) {
+		Resource *cur = *pp;
+		cur->destroy(aTHX_ cur->data);
+		cur->data = (void *)"no";
+		cur->destroy = NULL;
+		*pp = cur->next;
+		Safefree(cur);
+	}
+}
+
+static void sentinel_register(Sentinel sen, void *data, void (*destroy)(pTHX_ void *)) {
+	Resource *cur;
+
+	Newx(cur, 1, Resource);
+	cur->data = data;
+	cur->destroy = destroy;
+	cur->next = *sen;
+	*sen = cur;
+}
+
+static void my_sv_refcnt_dec_void(pTHX_ void *p) {
+	SV *sv = p;
+	SvREFCNT_dec(sv);
+}
+
+static SV *sentinel_mortalize(Sentinel sen, SV *sv) {
+	sentinel_register(sen, sv, my_sv_refcnt_dec_void);
+	return sv;
+}
+
+static int kw_flags(pTHX_ Sentinel sen, const char *kw_ptr, STRLEN kw_len, KWSpec *spec) {
 	HV *hints;
 	SV *sv, **psv;
 	const char *p, *kw_active;
 	STRLEN kw_active_len;
 
 	spec->flags = 0;
-	spec->shift = sv_2mortal(newSVpvs(""));
-	spec->attrs = sv_2mortal(newSVpvs(""));
+	spec->shift = sentinel_mortalize(sen, newSVpvs(""));
+	spec->attrs = sentinel_mortalize(sen, newSVpvs(""));
 
 	if (!(hints = GvHV(PL_hintgv))) {
 		return FALSE;
@@ -144,7 +184,7 @@ static int kw_flags(pTHX_ const char *kw_ptr, STRLEN kw_len, KWSpec *spec) {
 	const char *fk_ptr_; \
 	STRLEN fk_len_; \
 	SV *fk_sv_; \
-	fk_sv_ = sv_2mortal(newSVpvs(HINTK_ ## NAME)); \
+	fk_sv_ = sentinel_mortalize(sen, newSVpvs(HINTK_ ## NAME)); \
 	sv_catpvn(fk_sv_, PTR, LEN); \
 	fk_ptr_ = SvPV(fk_sv_, fk_len_); \
 	if (!((X) = hv_fetch(hints, fk_ptr_, fk_len_, 0))) { \
@@ -195,7 +235,7 @@ enum {
 
 static void my_sv_cat_c(pTHX_ SV *sv, U32 c) {
 	char ds[UTF8_MAXBYTES + 1], *d;
-	d = uvchr_to_utf8(ds, c);
+	d = (char *)uvchr_to_utf8((U8 *)ds, c);
 	if (d - ds > 1) {
 		sv_utf8_upgrade(sv);
 	}
@@ -214,10 +254,10 @@ static bool my_is_uni_xidcont(pTHX_ UV c) {
 	return is_utf8_xidcont(tmpbuf);
 }
 
-static SV *my_scan_word(pTHX_ bool allow_package) {
+static SV *my_scan_word(pTHX_ Sentinel sen, bool allow_package) {
 	bool at_start, at_substart;
 	I32 c;
-	SV *sv = sv_2mortal(newSVpvs(""));
+	SV *sv = sentinel_mortalize(sen, newSVpvs(""));
 	if (lex_bufutf8()) {
 		SvUTF8_on(sv);
 	}
@@ -263,14 +303,14 @@ static SV *my_scan_word(pTHX_ bool allow_package) {
 	return SvCUR(sv) ? sv : NULL;
 }
 
-static SV *my_scan_parens_tail(pTHX_ bool keep_backslash) {
+static SV *my_scan_parens_tail(pTHX_ Sentinel sen, bool keep_backslash) {
 	I32 c, nesting;
 	SV *sv;
 	line_t start;
 
 	start = CopLINE(PL_curcop);
 
-	sv = sv_2mortal(newSVpvs(""));
+	sv = sentinel_mortalize(sen, newSVpvs(""));
 	if (lex_bufutf8()) {
 		SvUTF8_on(sv);
 	}
@@ -307,7 +347,7 @@ static SV *my_scan_parens_tail(pTHX_ bool keep_backslash) {
 	return sv;
 }
 
-static void my_check_prototype(pTHX_ const SV *declarator, SV *proto) {
+static void my_check_prototype(pTHX_ Sentinel sen, const SV *declarator, SV *proto) {
 	char *start, *r, *w, *end;
 	STRLEN len;
 
@@ -331,7 +371,7 @@ static void my_check_prototype(pTHX_ const SV *declarator, SV *proto) {
 
 	/* check for bad characters */
 	if (strspn(start, "$@%*;[]&\\_+") != len) {
-		SV *dsv = newSVpvs_flags("", SVs_TEMP);
+		SV *dsv = sentinel_mortalize(sen, newSVpvs(""));
 		warner(
 			packWARN(WARN_ILLEGALPROTO),
 			"Illegal character in prototype for %"SVf" : %s",
@@ -608,6 +648,7 @@ enum {
  */
 static PADOFFSET parse_param(
 	pTHX_
+	Sentinel sen,
 	const SV *declarator, const KWSpec *spec, ParamSpec *param_spec,
 	int *pflags, SV **pname, OP **pinit
 ) {
@@ -641,7 +682,7 @@ static PADOFFSET parse_param(
 	lex_read_unichar(0);
 	lex_read_space(0);
 
-	if (!(name = my_scan_word(aTHX_ FALSE))) {
+	if (!(name = my_scan_word(aTHX_ sen, FALSE))) {
 		croak("In %"SVf": missing identifier after '%c'", SVfARG(declarator), sigil);
 	}
 	sv_insert(name, 0, 0, &sigil, 1);
@@ -712,7 +753,7 @@ static OP *mkconstpv(pTHX_ const char *p, size_t n) {
 
 #define mkconstpvs(S) mkconstpv(aTHX_ "" S "", sizeof S - 1)
 
-static int parse_fun(pTHX_ OP **pop, const char *keyword_ptr, STRLEN keyword_len, const KWSpec *spec) {
+static int parse_fun(pTHX_ Sentinel sen, OP **pop, const char *keyword_ptr, STRLEN keyword_len, const KWSpec *spec) {
 	ParamSpec *param_spec;
 	SV *declarator;
 	I32 floor_ix;
@@ -724,7 +765,7 @@ static int parse_fun(pTHX_ OP **pop, const char *keyword_ptr, STRLEN keyword_len
 	unsigned builtin_attrs;
 	I32 c;
 
-	declarator = sv_2mortal(newSVpvn(keyword_ptr, keyword_len));
+	declarator = sentinel_mortalize(sen, newSVpvn(keyword_ptr, keyword_len));
 
 	lex_read_space(0);
 
@@ -732,7 +773,7 @@ static int parse_fun(pTHX_ OP **pop, const char *keyword_ptr, STRLEN keyword_len
 
 	/* function name */
 	saw_name = NULL;
-	if ((spec->flags & FLAG_NAME_OK) && (saw_name = my_scan_word(aTHX_ TRUE))) {
+	if ((spec->flags & FLAG_NAME_OK) && (saw_name = my_scan_word(aTHX_ sen, TRUE))) {
 
 		if (PL_parser->expect != XSTATE) {
 			/* bail out early so we don't predeclare $saw_name */
@@ -769,7 +810,7 @@ static int parse_fun(pTHX_ OP **pop, const char *keyword_ptr, STRLEN keyword_len
 	/* initialize synthetic optree */
 	Newx(prelude_sentinel, 1, OP *);
 	*prelude_sentinel = NULL;
-	SAVEDESTRUCTOR_X(free_ptr_op, prelude_sentinel);
+	sentinel_register(sen, prelude_sentinel, free_ptr_op);
 
 	/* parameters */
 	param_spec = NULL;
@@ -780,11 +821,11 @@ static int parse_fun(pTHX_ OP **pop, const char *keyword_ptr, STRLEN keyword_len
 
 		Newx(init_sentinel, 1, OP *);
 		*init_sentinel = NULL;
-		SAVEDESTRUCTOR_X(free_ptr_op, init_sentinel);
+		sentinel_register(sen, init_sentinel, free_ptr_op);
 
 		Newx(param_spec, 1, ParamSpec);
 		ps_init(param_spec);
-		SAVEDESTRUCTOR_X(ps_free_void, param_spec);
+		sentinel_register(sen, param_spec, ps_free_void);
 
 		lex_read_unichar(0);
 		lex_read_space(0);
@@ -795,7 +836,7 @@ static int parse_fun(pTHX_ OP **pop, const char *keyword_ptr, STRLEN keyword_len
 			char sigil;
 			PADOFFSET padoff;
 
-			padoff = parse_param(aTHX_ declarator, spec, param_spec, &flags, &name, init_sentinel);
+			padoff = parse_param(aTHX_ sen, declarator, spec, param_spec, &flags, &name, init_sentinel);
 
 			S_intro_my(aTHX);
 
@@ -871,11 +912,13 @@ static int parse_fun(pTHX_ OP **pop, const char *keyword_ptr, STRLEN keyword_len
 					*init_sentinel = NULL;
 					param_spec->named_optional.used++;
 				} else {
+					Param *p;
+
 					if (param_spec->positional_optional.used) {
 						croak("In %"SVf": can't combine optional positional (%"SVf") and required named (%"SVf") parameters", SVfARG(declarator), SVfARG(param_spec->positional_optional.data[0].param.name), SVfARG(name));
 					}
 
-					Param *p = pv_extend(&param_spec->named_required);
+					p = pv_extend(&param_spec->named_required);
 					p->name = name;
 					p->padoff = padoff;
 					param_spec->named_required.used++;
@@ -924,10 +967,10 @@ static int parse_fun(pTHX_ OP **pop, const char *keyword_ptr, STRLEN keyword_len
 			c = ':';
 		} else {
 			lex_read_unichar(0);
-			if (!(proto = my_scan_parens_tail(aTHX_ FALSE))) {
+			if (!(proto = my_scan_parens_tail(aTHX_ sen, FALSE))) {
 				croak("In %"SVf": prototype not terminated", SVfARG(declarator));
 			}
-			my_check_prototype(aTHX_ declarator, proto);
+			my_check_prototype(aTHX_ sen, declarator, proto);
 			lex_read_space(0);
 			c = lex_peek_unichar(0);
 			if (!(c == ':' || c == '{')) {
@@ -940,7 +983,7 @@ static int parse_fun(pTHX_ OP **pop, const char *keyword_ptr, STRLEN keyword_len
 	/* attributes */
 	Newx(attrs_sentinel, 1, OP *);
 	*attrs_sentinel = NULL;
-	SAVEDESTRUCTOR_X(free_ptr_op, attrs_sentinel);
+	sentinel_register(sen, attrs_sentinel, free_ptr_op);
 
 	if (c == ':' || c == '{') /* '}' - hi, vim */ {
 
@@ -958,7 +1001,7 @@ static int parse_fun(pTHX_ OP **pop, const char *keyword_ptr, STRLEN keyword_len
 			for (;;) {
 				SV *attr;
 
-				if (!(attr = my_scan_word(aTHX_ FALSE))) {
+				if (!(attr = my_scan_word(aTHX_ sen, FALSE))) {
 					break;
 				}
 
@@ -976,7 +1019,7 @@ static int parse_fun(pTHX_ OP **pop, const char *keyword_ptr, STRLEN keyword_len
 				} else {
 					SV *sv;
 					lex_read_unichar(0);
-					if (!(sv = my_scan_parens_tail(aTHX_ TRUE))) {
+					if (!(sv = my_scan_parens_tail(aTHX_ sen, TRUE))) {
 						croak("In %"SVf": unterminated attribute parameter in attribute list", SVfARG(declarator));
 					}
 					sv_catpvs(attr, "(");
@@ -1036,11 +1079,10 @@ static int parse_fun(pTHX_ OP **pop, const char *keyword_ptr, STRLEN keyword_len
 	/* check number of arguments */
 	if (spec->flags & FLAG_CHECK_NARGS) {
 		int amin, amax;
-		size_t named;
 
 		amin = args_min(aTHX_ param_spec, spec);
 		if (amin > 0) {
-			OP *chk, *cond, *err, *croak;
+			OP *chk, *cond, *err, *xcroak;
 
 			err = mkconstsv(aTHX_ newSVpvf("Not enough arguments for %"SVf" (expected %d, got ", SVfARG(declarator), amin));
 			err = newBINOP(
@@ -1054,10 +1096,10 @@ static int parse_fun(pTHX_ OP **pop, const char *keyword_ptr, STRLEN keyword_len
 				mkconstpvs(")")
 			);
 
-			croak = newCVREF(OPf_WANT_SCALAR,
-			                 newGVOP(OP_GV, 0, gv_fetchpvs("Carp::croak", 0, SVt_PVCV)));
+			xcroak = newCVREF(OPf_WANT_SCALAR,
+			                  newGVOP(OP_GV, 0, gv_fetchpvs("Carp::croak", 0, SVt_PVCV)));
 			err = newUNOP(OP_ENTERSUB, OPf_STACKED,
-			              op_append_elem(OP_LIST, err, croak));
+			              op_append_elem(OP_LIST, err, xcroak));
 
 			cond = newBINOP(OP_LT, 0,
 			                newAVREF(newGVOP(OP_GV, 0, PL_defgv)),
@@ -1069,7 +1111,7 @@ static int parse_fun(pTHX_ OP **pop, const char *keyword_ptr, STRLEN keyword_len
 
 		amax = args_max(param_spec);
 		if (amax >= 0) {
-			OP *chk, *cond, *err, *croak;
+			OP *chk, *cond, *err, *xcroak;
 
 			err = mkconstsv(aTHX_ newSVpvf("Too many arguments for %"SVf" (expected %d, got ", SVfARG(declarator), amax));
 			err = newBINOP(
@@ -1083,12 +1125,12 @@ static int parse_fun(pTHX_ OP **pop, const char *keyword_ptr, STRLEN keyword_len
 				mkconstpvs(")")
 			);
 
-			croak = newCVREF(
+			xcroak = newCVREF(
 				OPf_WANT_SCALAR,
 				newGVOP(OP_GV, 0, gv_fetchpvs("Carp::croak", 0, SVt_PVCV))
 			);
 			err = newUNOP(OP_ENTERSUB, OPf_STACKED,
-			op_append_elem(OP_LIST, err, croak));
+			op_append_elem(OP_LIST, err, xcroak));
 
 			cond = newBINOP(
 				OP_GT, 0,
@@ -1101,17 +1143,17 @@ static int parse_fun(pTHX_ OP **pop, const char *keyword_ptr, STRLEN keyword_len
 		}
 
 		if (param_spec && (count_named_params(param_spec) || (param_spec->slurpy.name && SvPV_nolen(param_spec->slurpy.name)[0] == '%'))) {
-			OP *chk, *cond, *err, *croak;
+			OP *chk, *cond, *err, *xcroak;
 			const UV fixed = count_positional_params(param_spec) + !!param_spec->invocant.name;
 
 			err = mkconstsv(aTHX_ newSVpvf("Odd number of paired arguments for %"SVf"", SVfARG(declarator)));
 
-			croak = newCVREF(
+			xcroak = newCVREF(
 				OPf_WANT_SCALAR,
 				newGVOP(OP_GV, 0, gv_fetchpvs("Carp::croak", 0, SVt_PVCV))
 			);
 			err = newUNOP(OP_ENTERSUB, OPf_STACKED,
-			op_append_elem(OP_LIST, err, croak));
+			op_append_elem(OP_LIST, err, xcroak));
 
 			cond = newBINOP(OP_GT, 0,
 			                newAVREF(newGVOP(OP_GV, 0, PL_defgv)),
@@ -1309,21 +1351,21 @@ static int parse_fun(pTHX_ OP **pop, const char *keyword_ptr, STRLEN keyword_len
 				cond = mkhvelem(aTHX_ param_spec->rest_hash, mkconstpv(aTHX_ p + 1, n - 1));
 
 				if (spec->flags & FLAG_CHECK_NARGS) {
-					OP *croak, *msg;
+					OP *xcroak, *msg;
 
 					var = mkhvelem(aTHX_ param_spec->rest_hash, mkconstpv(aTHX_ p + 1, n - 1));
 					var = newUNOP(OP_DELETE, 0, var);
 
 					msg = mkconstsv(aTHX_ newSVpvf("In %"SVf": missing named parameter: %.*s", SVfARG(declarator), (int)(n - 1), p + 1));
-					croak = newCVREF(
+					xcroak = newCVREF(
 						OPf_WANT_SCALAR,
 						newGVOP(OP_GV, 0, gv_fetchpvs("Carp::croak", 0, SVt_PVCV))
 					);
-					croak = newUNOP(OP_ENTERSUB, OPf_STACKED, op_append_elem(OP_LIST, msg, croak));
+					xcroak = newUNOP(OP_ENTERSUB, OPf_STACKED, op_append_elem(OP_LIST, msg, xcroak));
 
 					cond = newUNOP(OP_EXISTS, 0, cond);
 
-					cond = newCONDOP(0, cond, var, croak);
+					cond = newCONDOP(0, cond, var, xcroak);
 				}
 
 				var = my_var(
@@ -1364,7 +1406,7 @@ static int parse_fun(pTHX_ OP **pop, const char *keyword_ptr, STRLEN keyword_len
 			if (!param_spec->slurpy.name) {
 				if (spec->flags & FLAG_CHECK_NARGS) {
 					/* croak if %{rest} */
-					OP *croak, *cond, *keys, *msg;
+					OP *xcroak, *cond, *keys, *msg;
 
 					keys = newUNOP(OP_KEYS, 0, my_var_g(aTHX_ OP_PADHV, 0, param_spec->rest_hash));
 					keys = newLISTOP(OP_SORT, 0, newOP(OP_PUSHMARK, 0), keys);
@@ -1386,16 +1428,16 @@ static int parse_fun(pTHX_ OP **pop, const char *keyword_ptr, STRLEN keyword_len
 					msg = mkconstsv(aTHX_ newSVpvf("In %"SVf": no such named parameter: ", SVfARG(declarator)));
 					msg = newBINOP(OP_CONCAT, 0, msg, keys);
 
-					croak = newCVREF(
+					xcroak = newCVREF(
 						OPf_WANT_SCALAR,
 						newGVOP(OP_GV, 0, gv_fetchpvs("Carp::croak", 0, SVt_PVCV))
 					);
-					croak = newUNOP(OP_ENTERSUB, OPf_STACKED, op_append_elem(OP_LIST, msg, croak));
+					xcroak = newUNOP(OP_ENTERSUB, OPf_STACKED, op_append_elem(OP_LIST, msg, xcroak));
 
 					cond = newUNOP(OP_KEYS, 0, my_var_g(aTHX_ OP_PADHV, 0, param_spec->rest_hash));
-					croak = newCONDOP(0, cond, croak, NULL);
+					xcroak = newCONDOP(0, cond, xcroak, NULL);
 
-					*prelude_sentinel = op_append_list(OP_LINESEQ, *prelude_sentinel, newSTATEOP(0, NULL, croak));
+					*prelude_sentinel = op_append_list(OP_LINESEQ, *prelude_sentinel, newSTATEOP(0, NULL, xcroak));
 				} else {
 					OP *clear;
 
@@ -1483,16 +1525,21 @@ static int parse_fun(pTHX_ OP **pop, const char *keyword_ptr, STRLEN keyword_len
 static int my_keyword_plugin(pTHX_ char *keyword_ptr, STRLEN keyword_len, OP **op_ptr) {
 	KWSpec spec;
 	int ret;
+	Sentinel sen = { NULL };
 
+	ENTER;
 	SAVETMPS;
 
-	if (kw_flags(aTHX_ keyword_ptr, keyword_len, &spec)) {
-		ret = parse_fun(aTHX_ op_ptr, keyword_ptr, keyword_len, &spec);
+	SAVEDESTRUCTOR_X(sentinel_clear_void, sen);
+
+	if (kw_flags(aTHX_ sen, keyword_ptr, keyword_len, &spec)) {
+		ret = parse_fun(aTHX_ sen, op_ptr, keyword_ptr, keyword_len, &spec);
 	} else {
 		ret = next_keyword_plugin(aTHX_ keyword_ptr, keyword_len, op_ptr);
 	}
 
 	FREETMPS;
+	LEAVE;
 
 	return ret;
 }

@@ -2,14 +2,15 @@ package Function::Parameters;
 
 use v5.14.0;
 
-use strict;
 use warnings;
 
 use Carp qw(confess);
 
 use XSLoader;
 BEGIN {
-	our $VERSION = '1.00';
+	our $VERSION = '1.00_01';
+	our $XS_VERSION = $VERSION;
+	$VERSION = eval $VERSION;
 	XSLoader::load;
 }
 
