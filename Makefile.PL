@@ -23,13 +23,11 @@ WriteMakefile(
     },
     PREREQ_PM => {
         'Carp' => 0,
-        'Moo' => 0,
         'XSLoader' => 0,
         'warnings' => 0,
     },
     MIN_PERL_VERSION => '5.14.0',
     META_MERGE => {
-        'meta-spec' => { version => 2 },
         resources => {
             repository => {
                 url => 'git://git.shadowcat.co.uk/p5sagit/Function-Parameters',

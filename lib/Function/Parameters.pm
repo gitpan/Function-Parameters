@@ -8,9 +8,7 @@ use Carp qw(confess);
 
 use XSLoader;
 BEGIN {
-	our $VERSION = '1.00_02';
-	our $XS_VERSION = $VERSION;
-	$VERSION = eval $VERSION;
+	our $VERSION = '1.0003';
 	XSLoader::load;
 }
 
@@ -34,14 +32,12 @@ my %type_map = (
 		default_arguments => 1,
 		check_argument_count => 0,
 		named_parameters => 1,
-		types => 1,
 	},
 	method   => {
 		name => 'optional',
 		default_arguments => 1,
 		check_argument_count => 0,
 		named_parameters => 1,
-		types => 1,
 		attrs => ':method',
 		shift => '$self',
 		invocant => 1,
@@ -51,7 +47,6 @@ my %type_map = (
 		default_arguments => 1,
 		check_argument_count => 0,
 		named_parameters => 1,
-		types => 1,
 		attributes => ':method',
 		shift => '$class',
 		invocant => 1,
@@ -121,7 +116,6 @@ sub import {
 		$clean{check_argument_count} = !!delete $type{check_argument_count};
 		$clean{invocant} = !!delete $type{invocant};
 		$clean{named_parameters} = !!delete $type{named_parameters};
-		$clean{types} = !!delete $type{types};
 
 		%type and confess "Invalid keyword property: @{[keys %type]}";
 
@@ -137,10 +131,9 @@ sub import {
 			FLAG_ANON_OK | FLAG_NAME_OK
 		;
 		$flags |= FLAG_DEFAULT_ARGS if $type->{default_arguments};
-		$flags |= FLAG_CHECK_NARGS | FLAG_CHECK_TARGS if $type->{check_argument_count};
+		$flags |= FLAG_CHECK_NARGS if $type->{check_argument_count};
 		$flags |= FLAG_INVOCANT if $type->{invocant};
 		$flags |= FLAG_NAMED_PARAMS if $type->{named_parameters};
-		$flags |= FLAG_TYPES_OK if $type->{types};
 		$^H{HINTK_FLAGS_ . $kw} = $flags;
 		$^H{HINTK_SHIFT_ . $kw} = $type->{shift};
 		$^H{HINTK_ATTRS_ . $kw} = $type->{attrs};
@@ -161,68 +154,6 @@ sub unimport {
 	}
 }
 
-
-our %metadata;
-
-sub _register_info {
-	my (
-		$key,
-		$declarator,
-		$invocant,
-		$invocant_type,
-		$positional_required,
-		$positional_optional,
-		$named_required,
-		$named_optional,
-		$slurpy,
-		$slurpy_type,
-	) = @_;
-
-	my $info = {
-		declarator => $declarator,
-		invocant => defined $invocant ? [$invocant, $invocant_type] : undef,
-		slurpy   => defined $slurpy   ? [$slurpy  , $slurpy_type  ] : undef,
-		positional_required => $positional_required,
-		positional_optional => $positional_optional,
-		named_required => $named_required,
-		named_optional => $named_optional,
-	};
-
-	$metadata{$key} = $info;
-}
-
-sub _mkparam1 {
-	my ($pair) = @_;
-	my ($v, $t) = @{$pair || []} or return undef;
-	Function::Parameters::Param->new(
-		name => $v,
-		type => $t,
-	)
-}
-
-sub _mkparams {
-	my @r;
-	while (my ($v, $t) = splice @_, 0, 2) {
-		push @r, Function::Parameters::Param->new(
-			name => $v,
-			type => $t,
-		);
-	}
-	\@r
-}
-
-sub info {
-	my ($func) = @_;
-	my $key = _cv_root $func or return undef;
-	my $info = $metadata{$key} or return undef;
-	require Function::Parameters::Info;
-	Function::Parameters::Info->new(
-		keyword => $info->{declarator},
-		invocant => _mkparam1($info->{invocant}),
-		slurpy => _mkparam1($info->{slurpy}),
-		(map +("_$_" => _mkparams @{$info->{$_}}), glob '{positional,named}_{required,optional}')
-	)
-}
 
 'ok'
 
@@ -638,16 +569,6 @@ C<< use Function::Parameters { fun => 'function', method => 'method' } >>.
 C<use Function::Parameters qw(:strict)> is equivalent to
 C<< use Function::Parameters { fun => 'function_strict', method => 'method_strict' } >>.
 
-=head2 Introspection
-
-You can ask a function at runtime what parameters it has. This functionality is
-available through the function C<Function::Parameters::info> (which is not
-exported, so you have to call it by its full name). It takes a reference to a
-function, and returns either C<undef> (if it knows nothing about the function)
-or a L<Function::Parameters::Info> object describing the parameter list.
-
-See L<Function::Parameters::Info> for examples.
-
 =head2 Wrapping C<Function::Parameters>
 
 If you want to write a wrapper around C<Function::Parameters>, you only have to
@@ -660,44 +581,6 @@ affects the file that is currently being compiled.
    Function::Parameters->import;
    # or Function::Parameters->import(@custom_import_args);
  }
-
-=head2 Experimental feature: Types
-
-An experimental feature is now available: You can annotate parameters with
-L<Moose types|Moose::Manual::Types>. That is, before each parameter you can put
-a type specification consisting of identifiers (C<Foo>), unions (C<... | ...>),
-and parametric types (C<...[...]>). Example:
-
-  fun foo(Int $n, ArrayRef[String | CodeRef] $cb) { ... }
-
-If you do this, L<Moose> will be loaded automatically (if that hasn't happened
-yet). These specifications are parsed and validated using
-L<C<Moose::Util::TypeConstraints::find_or_parse_type_constraint>|Moose::Util::TypeConstraints/find_or_parse_type_constraint>.
-
-If you are in "lax" mode, nothing further happens and the types are ignored. If
-you are in "strict" mode, C<Function::Parameters> generates code to make sure
-any values passed in conform to the type (via
-L<< C<< $constraint->check($value) >>|Moose::Meta::TypeConstraint/$constraint->check($value) >>.
-
-In addition, these type constraints are inspectable through the
-L<Function::Parameters::Info> object returned by
-L<C<Function::Parameters::info>|/Introspection>.
-
-=head2 Experimental experimental feature: Type expressions
-
-An even more experimental feature is the ability to specify arbitrary
-expressions as types. The syntax for this is like the literal types described
-above, but with an expression wrapped in parentheses (C<( EXPR )>). Example:
-
-  fun foo(('Int') $n, ($othertype) $x) { ... }
-
-Every type expression must return either a string (which is resolved as for
-literal types), or a L<type constraint object|Moose::Meta::TypeConstraint>
-(providing C<check> and C<get_message> methods).
-
-Note that these expressions are evaluated (once) at parse time (similar to
-C<BEGIN> blocks), so make sure that any variables you use are set and any
-functions you call are defined at parse time.
 
 =head2 How it works
 
@@ -715,43 +598,6 @@ generated code corresponds to:
   method bar($x, $y, @z) { ... }
   # ... turns into ...
   sub bar :method { my $self = shift; my ($x, $y, @z) = @_; sub bar; ... }
-
-=head1 SUPPORT AND DOCUMENTATION
-
-After installing, you can find documentation for this module with the
-perldoc command.
-
-    perldoc Function::Parameters
-
-You can also look for information at:
-
-=over
-
-=item MetaCPAN
-
-L<https://metacpan.org/module/Function%3A%3AParameters>
-
-=item RT, CPAN's request tracker
-
-L<http://rt.cpan.org/NoAuth/Bugs.html?Dist=Function-Parameters>
-
-=item AnnoCPAN, Annotated CPAN documentation
-
-L<http://annocpan.org/dist/Function-Parameters>
-
-=item CPAN Ratings
-
-L<http://cpanratings.perl.org/d/Function-Parameters>
-
-=item Search CPAN
-
-L<http://search.cpan.org/dist/Function-Parameters/>
-
-=back
-
-=head1 SEE ALSO
-
-L<Function::Parameters::Info>
 
 =head1 AUTHOR
 

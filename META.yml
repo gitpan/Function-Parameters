@@ -2,7 +2,13 @@
 abstract: 'subroutine definitions with parameter lists'
 author:
   - 'Lukas Mai <l.mai@web.de>'
-build_requires: {}
+build_requires:
+  Dir::Self: 0
+  Test::Fatal: 0
+  Test::More: 0
+  strict: 0
+configure_requires:
+  ExtUtils::MakeMaker: 6.56
 dynamic_config: 1
 generated_by: 'ExtUtils::MakeMaker version 6.6302, CPAN::Meta::Converter version 2.120921'
 license: perl
@@ -14,6 +20,10 @@ no_index:
   directory:
     - t
     - inc
-resources:
-  repository: git://git.shadowcat.co.uk/p5sagit/Function-Parameters
-version: 1.00_02
+requires:
+  Carp: 0
+  XSLoader: 0
+  perl: 5.014000
+  warnings: 0
+resources: {}
+version: 1.0003
