@@ -219,10 +219,49 @@ static int kw_flags(pTHX_ Sentinel sen, const char *kw_ptr, STRLEN kw_len, KWSpe
 }
 
 
-static void free_ptr_op_void(pTHX_ void *vp) {
-	OP **pp = vp;
-	op_free(*pp);
-	Safefree(pp);
+#if HAVE_PERL_VERSION(5, 17, 2)
+ #define MY_OP_SLABBED(O) ((O)->op_slabbed)
+#else
+ #define MY_OP_SLABBED(O) 0
+#endif
+
+DEFSTRUCT(OpGuard) {
+	OP *op;
+	bool needs_freed;
+};
+
+static void op_guard_init(OpGuard *p) {
+	p->op = NULL;
+	p->needs_freed = FALSE;
+}
+
+static OpGuard op_guard_transfer(OpGuard *p) {
+	OpGuard r = *p;
+	op_guard_init(p);
+	return r;
+}
+
+static OP *op_guard_relinquish(OpGuard *p) {
+	OP *o = p->op;
+	op_guard_init(p);
+	return o;
+}
+
+static void op_guard_update(OpGuard *p, OP *o) {
+	p->op = o;
+	p->needs_freed = o && !MY_OP_SLABBED(o);
+}
+
+static void op_guard_clear(pTHX_ OpGuard *p) {
+	if (p->needs_freed) {
+		op_free(p->op);
+	}
+}
+
+static void free_op_guard_void(pTHX_ void *vp) {
+	OpGuard *p = vp;
+	op_guard_clear(aTHX_ p);
+	Safefree(p);
 }
 
 static void free_op_void(pTHX_ void *vp) {
@@ -257,17 +296,9 @@ static void my_sv_cat_c(pTHX_ SV *sv, U32 c) {
 	sv_catpvn(sv, ds, d - ds);
 }
 
-static bool my_is_uni_xidfirst(pTHX_ UV c) {
-	U8 tmpbuf[UTF8_MAXBYTES + 1];
-	uvchr_to_utf8(tmpbuf, c);
-	return is_utf8_xidfirst(tmpbuf);
-}
 
-static bool my_is_uni_xidcont(pTHX_ UV c) {
-	U8 tmpbuf[UTF8_MAXBYTES + 1];
-	uvchr_to_utf8(tmpbuf, c);
-	return is_utf8_xidcont(tmpbuf);
-}
+#define MY_UNI_IDFIRST(C) isIDFIRST_uni(C)
+#define MY_UNI_IDCONT(C)  isALNUM_uni(C)
 
 static SV *my_scan_word(pTHX_ Sentinel sen, bool allow_package) {
 	bool at_start, at_substart;
@@ -281,7 +312,7 @@ static SV *my_scan_word(pTHX_ Sentinel sen, bool allow_package) {
 	c = lex_peek_unichar(0);
 
 	while (c != -1) {
-		if (at_substart ? my_is_uni_xidfirst(aTHX_ c) : my_is_uni_xidcont(aTHX_ c)) {
+		if (at_substart ? MY_UNI_IDFIRST(c) : MY_UNI_IDCONT(c)) {
 			lex_read_unichar(0);
 			my_sv_cat_c(aTHX_ sv, c);
 			at_substart = FALSE;
@@ -289,7 +320,7 @@ static SV *my_scan_word(pTHX_ Sentinel sen, bool allow_package) {
 		} else if (allow_package && !at_substart && c == '\'') {
 			lex_read_unichar(0);
 			c = lex_peek_unichar(0);
-			if (!my_is_uni_xidfirst(aTHX_ c)) {
+			if (!MY_UNI_IDFIRST(c)) {
 				lex_stuff_pvs("'", 0);
 				break;
 			}
@@ -303,7 +334,7 @@ static SV *my_scan_word(pTHX_ Sentinel sen, bool allow_package) {
 			}
 			lex_read_unichar(0);
 			c = lex_peek_unichar(0);
-			if (!my_is_uni_xidfirst(aTHX_ c)) {
+			if (!MY_UNI_IDFIRST(c)) {
 				lex_stuff_pvs("::", 0);
 				break;
 			}
@@ -569,7 +600,7 @@ DEFSTRUCT(Param) {
 
 DEFSTRUCT(ParamInit) {
 	Param param;
-	OP *init;
+	OpGuard init;
 };
 
 #define VEC(B) B ## _Vec
@@ -648,10 +679,7 @@ static void p_clear(pTHX_ Param *p) {
 
 static void pi_clear(pTHX_ ParamInit *pi) {
 	p_clear(aTHX_ &pi->param);
-	if (pi->init) {
-		op_free(pi->init);
-		pi->init = NULL;
-	}
+	op_guard_clear(aTHX_ &pi->init);
 }
 
 DEFVECTOR_CLEAR(pv_clear, Param, p_clear);
@@ -779,20 +807,17 @@ enum {
 	PARAM_NAMED    = 0x02
 };
 
-/* *pinit must be NULL on entry.
- * caller must free *pinit on error.
- */
 static PADOFFSET parse_param(
 	pTHX_
 	Sentinel sen,
 	const SV *declarator, const KWSpec *spec, ParamSpec *param_spec,
-	int *pflags, SV **pname, OP **pinit, SV **ptype
+	int *pflags, SV **pname, OpGuard *ginit, SV **ptype
 ) {
 	I32 c;
 	char sigil;
 	SV *name;
 
-	assert(!*pinit);
+	assert(!ginit->op);
 	*pflags = 0;
 	*ptype = NULL;
 
@@ -813,7 +838,11 @@ static PADOFFSET parse_param(
 			if (!(expr = parse_fullexpr(PARSE_OPTIONAL))) {
 				croak("In %"SVf": invalid type expression", SVfARG(declarator));
 			}
-			expr_sentinel = sentinel_register(sen, expr, free_op_void);
+			if (MY_OP_SLABBED(expr)) {
+				expr_sentinel = NULL;
+			} else {
+				expr_sentinel = sentinel_register(sen, expr, free_op_void);
+			}
 
 			lex_read_space(0);
 			c = lex_peek_unichar(0);
@@ -824,7 +853,9 @@ static PADOFFSET parse_param(
 			lex_read_space(0);
 
 			SvREFCNT_inc_simple_void(PL_compcv);
-			sentinel_disarm(expr_sentinel);
+			if (expr_sentinel) {
+				sentinel_disarm(expr_sentinel);
+			}
 			*ptype = my_eval(aTHX_ sen, floor, expr);
 			*ptype = reify_type(aTHX_ sen, declarator, *ptype);
 			if (!sv_isobject(*ptype)) {
@@ -832,7 +863,7 @@ static PADOFFSET parse_param(
 			}
 
 			c = lex_peek_unichar(0);
-		} else if (my_is_uni_xidfirst(aTHX_ c)) {
+		} else if (MY_UNI_IDFIRST(c)) {
 			*ptype = parse_type(aTHX_ sen, declarator);
 			my_require(aTHX_ "Moose/Util/TypeConstraints.pm");
 			*ptype = reify_type(aTHX_ sen, declarator, *ptype);
@@ -882,7 +913,7 @@ static PADOFFSET parse_param(
 			param_spec->invocant.padoff = pad_add_name_sv(param_spec->invocant.name, 0, NULL, NULL);
 		}
 
-		*pinit = parse_termexpr(0);
+		op_guard_update(ginit, parse_termexpr(0));
 
 		lex_read_space(0);
 		c = lex_peek_unichar(0);
@@ -1136,9 +1167,10 @@ static int parse_fun(pTHX_ Sentinel sen, OP **pop, const char *keyword_ptr, STRL
 	I32 floor_ix;
 	int save_ix;
 	SV *saw_name;
-	OP **prelude_sentinel;
+	OpGuard *prelude_sentinel;
 	SV *proto;
-	OP **attrs_sentinel, *body;
+	OpGuard *attrs_sentinel;
+	OP *body;
 	unsigned builtin_attrs;
 	I32 c;
 
@@ -1185,20 +1217,20 @@ static int parse_fun(pTHX_ Sentinel sen, OP **pop, const char *keyword_ptr, STRL
 	save_ix = S_block_start(aTHX_ TRUE);
 
 	/* initialize synthetic optree */
-	Newx(prelude_sentinel, 1, OP *);
-	*prelude_sentinel = NULL;
-	sentinel_register(sen, prelude_sentinel, free_ptr_op_void);
+	Newx(prelude_sentinel, 1, OpGuard);
+	op_guard_init(prelude_sentinel);
+	sentinel_register(sen, prelude_sentinel, free_op_guard_void);
 
 	/* parameters */
 	param_spec = NULL;
 
 	c = lex_peek_unichar(0);
 	if (c == '(') {
-		OP **init_sentinel;
+		OpGuard *init_sentinel;
 
-		Newx(init_sentinel, 1, OP *);
-		*init_sentinel = NULL;
-		sentinel_register(sen, init_sentinel, free_ptr_op_void);
+		Newx(init_sentinel, 1, OpGuard);
+		op_guard_init(init_sentinel);
+		sentinel_register(sen, init_sentinel, free_op_guard_void);
 
 		Newx(param_spec, 1, ParamSpec);
 		ps_init(param_spec);
@@ -1228,13 +1260,13 @@ static int parse_fun(pTHX_ Sentinel sen, OP **pop, const char *keyword_ptr, STRL
 					croak("In %"SVf": named parameter %"SVf" can't be a%s", SVfARG(declarator), SVfARG(name), sigil == '@' ? "n array" : " hash");
 				}
 			} else if (flags & PARAM_INVOCANT) {
-				if (*init_sentinel) {
+				if (init_sentinel->op) {
 					croak("In %"SVf": invocant %"SVf" can't have a default value", SVfARG(declarator), SVfARG(name));
 				}
 				if (sigil != '$') {
 					croak("In %"SVf": invocant %"SVf" can't be a%s", SVfARG(declarator), SVfARG(name), sigil == '@' ? "n array" : " hash");
 				}
-			} else if (sigil != '$' && *init_sentinel) {
+			} else if (sigil != '$' && init_sentinel->op) {
 				croak("In %"SVf": %s %"SVf" can't have a default value", SVfARG(declarator), sigil == '@' ? "array" : "hash", SVfARG(name));
 			}
 
@@ -1243,7 +1275,7 @@ static int parse_fun(pTHX_ Sentinel sen, OP **pop, const char *keyword_ptr, STRL
 				croak("In %"SVf": I was expecting \")\" after \"%"SVf"\", not \"%"SVf"\"", SVfARG(declarator), SVfARG(param_spec->slurpy.name), SVfARG(name));
 			}
 			if (sigil != '$') {
-				assert(!*init_sentinel);
+				assert(!init_sentinel->op);
 				param_spec->slurpy.name = name;
 				param_spec->slurpy.padoff = padoff;
 				param_spec->slurpy.type = type;
@@ -1270,7 +1302,7 @@ static int parse_fun(pTHX_ Sentinel sen, OP **pop, const char *keyword_ptr, STRL
 				continue;
 			}
 
-			if (*init_sentinel && !(spec->flags & FLAG_DEFAULT_ARGS)) {
+			if (init_sentinel->op && !(spec->flags & FLAG_DEFAULT_ARGS)) {
 				croak("In %"SVf": default argument for %"SVf" not allowed here", SVfARG(declarator), SVfARG(name));
 			}
 
@@ -1283,13 +1315,12 @@ static int parse_fun(pTHX_ Sentinel sen, OP **pop, const char *keyword_ptr, STRL
 					croak("In %"SVf": named parameter :%"SVf" not allowed here", SVfARG(declarator), SVfARG(name));
 				}
 
-				if (*init_sentinel) {
+				if (init_sentinel->op) {
 					ParamInit *pi = piv_extend(&param_spec->named_optional);
 					pi->param.name = name;
 					pi->param.padoff = padoff;
 					pi->param.type = type;
-					pi->init = *init_sentinel;
-					*init_sentinel = NULL;
+					pi->init = op_guard_transfer(init_sentinel);
 					param_spec->named_optional.used++;
 				} else {
 					Param *p;
@@ -1305,13 +1336,12 @@ static int parse_fun(pTHX_ Sentinel sen, OP **pop, const char *keyword_ptr, STRL
 					param_spec->named_required.used++;
 				}
 			} else {
-				if (*init_sentinel || param_spec->positional_optional.used) {
+				if (init_sentinel->op || param_spec->positional_optional.used) {
 					ParamInit *pi = piv_extend(&param_spec->positional_optional);
 					pi->param.name = name;
 					pi->param.padoff = padoff;
 					pi->param.type = type;
-					pi->init = *init_sentinel;
-					*init_sentinel = NULL;
+					pi->init = op_guard_transfer(init_sentinel);
 					param_spec->positional_optional.used++;
 				} else {
 					Param *p = pv_extend(&param_spec->positional_required);
@@ -1325,7 +1355,6 @@ static int parse_fun(pTHX_ Sentinel sen, OP **pop, const char *keyword_ptr, STRL
 		}
 		lex_read_unichar(0);
 		lex_read_space(0);
-		*init_sentinel = NULL;
 
 		if (!param_spec->invocant.name && SvTRUE(spec->shift)) {
 			if (ps_contains(aTHX_ param_spec, spec->shift)) {
@@ -1364,9 +1393,9 @@ static int parse_fun(pTHX_ Sentinel sen, OP **pop, const char *keyword_ptr, STRL
 	}
 
 	/* attributes */
-	Newx(attrs_sentinel, 1, OP *);
-	*attrs_sentinel = NULL;
-	sentinel_register(sen, attrs_sentinel, free_ptr_op_void);
+	Newx(attrs_sentinel, 1, OpGuard);
+	op_guard_init(attrs_sentinel);
+	sentinel_register(sen, attrs_sentinel, free_op_guard_void);
 
 	if (c == ':' || c == '{') /* '}' - hi, vim */ {
 
@@ -1414,7 +1443,7 @@ static int parse_fun(pTHX_ Sentinel sen, OP **pop, const char *keyword_ptr, STRL
 				}
 
 				if (attr) {
-					*attrs_sentinel = op_append_elem(OP_LIST, *attrs_sentinel, mkconstsv(aTHX_ SvREFCNT_inc_simple_NN(attr)));
+					op_guard_update(attrs_sentinel, op_append_elem(OP_LIST, attrs_sentinel->op, mkconstsv(aTHX_ SvREFCNT_inc_simple_NN(attr))));
 				}
 
 				if (c == ':') {
@@ -1489,7 +1518,7 @@ static int parse_fun(pTHX_ Sentinel sen, OP **pop, const char *keyword_ptr, STRL
 			                mkconstiv(aTHX_ amin));
 			chk = newLOGOP(OP_AND, 0, cond, err);
 
-			*prelude_sentinel = op_append_list(OP_LINESEQ, *prelude_sentinel, newSTATEOP(0, NULL, chk));
+			op_guard_update(prelude_sentinel, op_append_list(OP_LINESEQ, prelude_sentinel->op, newSTATEOP(0, NULL, chk)));
 		}
 
 		amax = args_max(param_spec);
@@ -1522,7 +1551,7 @@ static int parse_fun(pTHX_ Sentinel sen, OP **pop, const char *keyword_ptr, STRL
 			);
 			chk = newLOGOP(OP_AND, 0, cond, err);
 
-			*prelude_sentinel = op_append_list(OP_LINESEQ, *prelude_sentinel, newSTATEOP(0, NULL, chk));
+			op_guard_update(prelude_sentinel, op_append_list(OP_LINESEQ, prelude_sentinel->op, newSTATEOP(0, NULL, chk)));
 		}
 
 		if (param_spec && (count_named_params(param_spec) || (param_spec->slurpy.name && SvPV_nolen(param_spec->slurpy.name)[0] == '%'))) {
@@ -1552,7 +1581,7 @@ static int parse_fun(pTHX_ Sentinel sen, OP **pop, const char *keyword_ptr, STRL
 			                         mkconstiv(aTHX_ 2)));
 			chk = newLOGOP(OP_AND, 0, cond, err);
 
-			*prelude_sentinel = op_append_list(OP_LINESEQ, *prelude_sentinel, newSTATEOP(0, NULL, chk));
+			op_guard_update(prelude_sentinel, op_append_list(OP_LINESEQ, prelude_sentinel->op, newSTATEOP(0, NULL, chk)));
 		}
 	}
 
@@ -1568,7 +1597,7 @@ static int parse_fun(pTHX_ Sentinel sen, OP **pop, const char *keyword_ptr, STRL
 			);
 			var = newASSIGNOP(OPf_STACKED, var, 0, newOP(OP_SHIFT, 0));
 
-			*prelude_sentinel = op_append_list(OP_LINESEQ, *prelude_sentinel, newSTATEOP(0, NULL, var));
+			op_guard_update(prelude_sentinel, op_append_list(OP_LINESEQ, prelude_sentinel->op, newSTATEOP(0, NULL, var)));
 		}
 	} else {
 		/* my $invocant = shift; */
@@ -1582,10 +1611,10 @@ static int parse_fun(pTHX_ Sentinel sen, OP **pop, const char *keyword_ptr, STRL
 			);
 			var = newASSIGNOP(OPf_STACKED, var, 0, newOP(OP_SHIFT, 0));
 
-			*prelude_sentinel = op_append_list(OP_LINESEQ, *prelude_sentinel, newSTATEOP(0, NULL, var));
+			op_guard_update(prelude_sentinel, op_append_list(OP_LINESEQ, prelude_sentinel->op, newSTATEOP(0, NULL, var)));
 
 			if (param_spec->invocant.type && (spec->flags & FLAG_CHECK_TARGS)) {
-				*prelude_sentinel = op_append_list(OP_LINESEQ, *prelude_sentinel, newSTATEOP(0, NULL, mktypecheckp(aTHX_ declarator, 0, &param_spec->invocant)));
+				op_guard_update(prelude_sentinel, op_append_list(OP_LINESEQ, prelude_sentinel->op, newSTATEOP(0, NULL, mktypecheckp(aTHX_ declarator, 0, &param_spec->invocant))));
 			}
 		}
 
@@ -1674,13 +1703,13 @@ static int parse_fun(pTHX_ Sentinel sen, OP **pop, const char *keyword_ptr, STRL
 				lhs->op_flags |= OPf_PARENS;
 				rhs = newAVREF(newGVOP(OP_GV, 0, PL_defgv));
 
-				*prelude_sentinel = op_append_list(
-					OP_LINESEQ, *prelude_sentinel,
+				op_guard_update(prelude_sentinel, op_append_list(
+					OP_LINESEQ, prelude_sentinel->op,
 					newSTATEOP(
 						0, NULL,
 						newASSIGNOP(OPf_STACKED, lhs, 0, rhs)
 					)
-				);
+				));
 			}
 		}
 
@@ -1706,9 +1735,8 @@ static int parse_fun(pTHX_ Sentinel sen, OP **pop, const char *keyword_ptr, STRL
 
 				nest = op_append_list(
 					OP_LINESEQ, nest,
-					newASSIGNOP(OPf_STACKED, var, 0, cur->init)
+					newASSIGNOP(OPf_STACKED, var, 0, op_guard_relinquish(&cur->init))
 				);
-				cur->init = NULL;
 				nest = newCONDOP(
 					0,
 					cond,
@@ -1717,10 +1745,10 @@ static int parse_fun(pTHX_ Sentinel sen, OP **pop, const char *keyword_ptr, STRL
 				);
 			}
 
-			*prelude_sentinel = op_append_list(
-				OP_LINESEQ, *prelude_sentinel,
+			op_guard_update(prelude_sentinel, op_append_list(
+				OP_LINESEQ, prelude_sentinel->op,
 				nest
-			);
+			));
 		}
 
 		/* named parameters */
@@ -1762,7 +1790,7 @@ static int parse_fun(pTHX_ Sentinel sen, OP **pop, const char *keyword_ptr, STRL
 				);
 				var = newASSIGNOP(OPf_STACKED, var, 0, cond);
 
-				*prelude_sentinel = op_append_list(OP_LINESEQ, *prelude_sentinel, newSTATEOP(0, NULL, var));
+				op_guard_update(prelude_sentinel, op_append_list(OP_LINESEQ, prelude_sentinel->op, newSTATEOP(0, NULL, var)));
 			}
 
 			for (i = 0, lim = param_spec->named_optional.used; i < lim; i++) {
@@ -1777,8 +1805,7 @@ static int parse_fun(pTHX_ Sentinel sen, OP **pop, const char *keyword_ptr, STRL
 				cond = mkhvelem(aTHX_ param_spec->rest_hash, mkconstpv(aTHX_ p + 1, n - 1));
 				cond = newUNOP(OP_EXISTS, 0, cond);
 
-				cond = newCONDOP(0, cond, var, cur->init);
-				cur->init = NULL;
+				cond = newCONDOP(0, cond, var, op_guard_relinquish(&cur->init));
 
 				var = my_var(
 					aTHX_
@@ -1787,7 +1814,7 @@ static int parse_fun(pTHX_ Sentinel sen, OP **pop, const char *keyword_ptr, STRL
 				);
 				var = newASSIGNOP(OPf_STACKED, var, 0, cond);
 
-				*prelude_sentinel = op_append_list(OP_LINESEQ, *prelude_sentinel, newSTATEOP(0, NULL, var));
+				op_guard_update(prelude_sentinel, op_append_list(OP_LINESEQ, prelude_sentinel->op, newSTATEOP(0, NULL, var)));
 			}
 
 			if (!param_spec->slurpy.name) {
@@ -1824,7 +1851,7 @@ static int parse_fun(pTHX_ Sentinel sen, OP **pop, const char *keyword_ptr, STRL
 					cond = newUNOP(OP_KEYS, 0, my_var_g(aTHX_ OP_PADHV, 0, param_spec->rest_hash));
 					xcroak = newCONDOP(0, cond, xcroak, NULL);
 
-					*prelude_sentinel = op_append_list(OP_LINESEQ, *prelude_sentinel, newSTATEOP(0, NULL, xcroak));
+					op_guard_update(prelude_sentinel, op_append_list(OP_LINESEQ, prelude_sentinel->op, newSTATEOP(0, NULL, xcroak)));
 				} else {
 					OP *clear;
 
@@ -1835,7 +1862,7 @@ static int parse_fun(pTHX_ Sentinel sen, OP **pop, const char *keyword_ptr, STRL
 						newNULLLIST()
 					);
 
-					*prelude_sentinel = op_append_list(OP_LINESEQ, *prelude_sentinel, newSTATEOP(0, NULL, clear));
+					op_guard_update(prelude_sentinel, op_append_list(OP_LINESEQ, prelude_sentinel->op, newSTATEOP(0, NULL, clear)));
 				}
 			} else if (param_spec->slurpy.padoff != param_spec->rest_hash) {
 				OP *var, *clear;
@@ -1851,7 +1878,7 @@ static int parse_fun(pTHX_ Sentinel sen, OP **pop, const char *keyword_ptr, STRL
 
 				var = newASSIGNOP(OPf_STACKED, var, 0, my_var_g(aTHX_ OP_PADHV, 0, param_spec->rest_hash));
 
-				*prelude_sentinel = op_append_list(OP_LINESEQ, *prelude_sentinel, newSTATEOP(0, NULL, var));
+				op_guard_update(prelude_sentinel, op_append_list(OP_LINESEQ, prelude_sentinel->op, newSTATEOP(0, NULL, var)));
 
 				clear = newASSIGNOP(
 					OPf_STACKED,
@@ -1860,7 +1887,7 @@ static int parse_fun(pTHX_ Sentinel sen, OP **pop, const char *keyword_ptr, STRL
 					newNULLLIST()
 				);
 
-				*prelude_sentinel = op_append_list(OP_LINESEQ, *prelude_sentinel, newSTATEOP(0, NULL, clear));
+				op_guard_update(prelude_sentinel, op_append_list(OP_LINESEQ, prelude_sentinel->op, newSTATEOP(0, NULL, clear)));
 			}
 		}
 
@@ -1872,7 +1899,7 @@ static int parse_fun(pTHX_ Sentinel sen, OP **pop, const char *keyword_ptr, STRL
 				Param *cur = &param_spec->positional_required.data[i];
 
 				if (cur->type) {
-					*prelude_sentinel = op_append_list(OP_LINESEQ, *prelude_sentinel, newSTATEOP(0, NULL, mktypecheckp(aTHX_ declarator, base + i, cur)));
+					op_guard_update(prelude_sentinel, op_append_list(OP_LINESEQ, prelude_sentinel->op, newSTATEOP(0, NULL, mktypecheckp(aTHX_ declarator, base + i, cur))));
 				}
 			}
 			base += i;
@@ -1881,7 +1908,7 @@ static int parse_fun(pTHX_ Sentinel sen, OP **pop, const char *keyword_ptr, STRL
 				Param *cur = &param_spec->positional_optional.data[i].param;
 
 				if (cur->type) {
-					*prelude_sentinel = op_append_list(OP_LINESEQ, *prelude_sentinel, newSTATEOP(0, NULL, mktypecheckp(aTHX_ declarator, base + i, cur)));
+					op_guard_update(prelude_sentinel, op_append_list(OP_LINESEQ, prelude_sentinel->op, newSTATEOP(0, NULL, mktypecheckp(aTHX_ declarator, base + i, cur))));
 				}
 			}
 			base += i;
@@ -1890,7 +1917,7 @@ static int parse_fun(pTHX_ Sentinel sen, OP **pop, const char *keyword_ptr, STRL
 				Param *cur = &param_spec->named_required.data[i];
 
 				if (cur->type) {
-					*prelude_sentinel = op_append_list(OP_LINESEQ, *prelude_sentinel, newSTATEOP(0, NULL, mktypecheckp(aTHX_ declarator, base + i, cur)));
+					op_guard_update(prelude_sentinel, op_append_list(OP_LINESEQ, prelude_sentinel->op, newSTATEOP(0, NULL, mktypecheckp(aTHX_ declarator, base + i, cur))));
 				}
 			}
 			base += i;
@@ -1899,7 +1926,7 @@ static int parse_fun(pTHX_ Sentinel sen, OP **pop, const char *keyword_ptr, STRL
 				Param *cur = &param_spec->named_optional.data[i].param;
 
 				if (cur->type) {
-					*prelude_sentinel = op_append_list(OP_LINESEQ, *prelude_sentinel, newSTATEOP(0, NULL, mktypecheckp(aTHX_ declarator, base + i, cur)));
+					op_guard_update(prelude_sentinel, op_append_list(OP_LINESEQ, prelude_sentinel->op, newSTATEOP(0, NULL, mktypecheckp(aTHX_ declarator, base + i, cur))));
 				}
 			}
 			base += i;
@@ -1919,7 +1946,7 @@ static int parse_fun(pTHX_ Sentinel sen, OP **pop, const char *keyword_ptr, STRL
 
 				loop = newFOROP(0, NULL, list, check, NULL);
 
-				*prelude_sentinel = op_append_list(OP_LINESEQ, *prelude_sentinel, newSTATEOP(0, NULL, loop));
+				op_guard_update(prelude_sentinel, op_append_list(OP_LINESEQ, prelude_sentinel->op, newSTATEOP(0, NULL, loop)));
 			}
 		}
 	}
@@ -1930,18 +1957,16 @@ static int parse_fun(pTHX_ Sentinel sen, OP **pop, const char *keyword_ptr, STRL
 	/* add '();' to make function return nothing by default */
 	/* (otherwise the invisible parameter initialization can "leak" into
 	   the return value: fun ($x) {}->("asdf", 0) == 2) */
-	if (*prelude_sentinel) {
+	if (prelude_sentinel->op) {
 		body = newSTATEOP(0, NULL, body);
 	}
 
-	body = op_append_list(OP_LINESEQ, *prelude_sentinel, body);
-	*prelude_sentinel = NULL;
+	body = op_append_list(OP_LINESEQ, op_guard_relinquish(prelude_sentinel), body);
 
 	/* it's go time. */
 	{
 		CV *cv;
-		OP *const attrs = *attrs_sentinel;
-		*attrs_sentinel = NULL;
+		OP *const attrs = op_guard_relinquish(attrs_sentinel);
 
 		SvREFCNT_inc_simple_void(PL_compcv);
 
@@ -1956,7 +1981,9 @@ static int parse_fun(pTHX_ Sentinel sen, OP **pop, const char *keyword_ptr, STRL
 			body
 		);
 
-		register_info(aTHX_ PTR2UV(CvROOT(cv)), declarator, spec, param_spec);
+		if (cv) {
+			register_info(aTHX_ PTR2UV(CvROOT(cv)), declarator, spec, param_spec);
+		}
 
 		if (saw_name) {
 			*pop = newOP(OP_NULL, 0);
