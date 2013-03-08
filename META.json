@@ -42,7 +42,7 @@
          }
       }
    },
-   "release_status" : "testing",
+   "release_status" : "stable",
    "resources" : {},
-   "version" : "1.0101_01"
+   "version" : "1.0102"
 }
