@@ -4,7 +4,7 @@
       "Lukas Mai <l.mai@web.de>"
    ],
    "dynamic_config" : 1,
-   "generated_by" : "ExtUtils::MakeMaker version 6.64, CPAN::Meta::Converter version 2.120921",
+   "generated_by" : "ExtUtils::MakeMaker version 6.66, CPAN::Meta::Converter version 2.131560",
    "license" : [
       "perl_5"
    ],
@@ -25,6 +25,7 @@
             "Dir::Self" : "0",
             "Test::Fatal" : "0",
             "Test::More" : "0",
+            "constant" : "0",
             "strict" : "0"
          }
       },
@@ -44,5 +45,5 @@
    },
    "release_status" : "stable",
    "resources" : {},
-   "version" : "1.0102"
+   "version" : "1.0103"
 }
