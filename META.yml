@@ -8,8 +8,7 @@ build_requires:
   Test::More: 0
   constant: 0
   strict: 0
-configure_requires:
-  ExtUtils::MakeMaker: 6.56
+  utf8: 0
 dynamic_config: 1
 generated_by: 'ExtUtils::MakeMaker version 6.66, CPAN::Meta::Converter version 2.131560'
 license: perl
@@ -26,5 +25,6 @@ requires:
   XSLoader: 0
   perl: 5.014000
   warnings: 0
-resources: {}
-version: 1.0103
+resources:
+  repository: git://git.shadowcat.co.uk/p5sagit/Function-Parameters
+version: 1.0103_01
