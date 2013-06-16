@@ -1,10 +1,9 @@
 package Function::Parameters::Info;
 
 use v5.14.0;
-
 use warnings;
 
-our $VERSION = '0.03';
+our $VERSION = '0.04';
 
 # If Moo isn't loaded yet but Moose is, avoid pulling in Moo and fall back to Moose
 my $Moo;
@@ -24,7 +23,7 @@ BEGIN {
 	BEGIN { $Moo->import; }
 	use overload
 		fallback => 1,
-		'""' => sub { $_[0]->name },
+		'""'     => sub { $_[0]->name },
 	;
 
 	has $_ => (is => 'ro') for qw(name type);

@@ -10,7 +10,7 @@ build_requires:
   strict: 0
   utf8: 0
 dynamic_config: 1
-generated_by: 'ExtUtils::MakeMaker version 6.66, CPAN::Meta::Converter version 2.131560'
+generated_by: 'ExtUtils::MakeMaker version 6.68, CPAN::Meta::Converter version 2.131560'
 license: perl
 meta-spec:
   url: http://module-build.sourceforge.net/META-spec-v1.4.html
@@ -27,4 +27,4 @@ requires:
   warnings: 0
 resources:
   repository: git://git.shadowcat.co.uk/p5sagit/Function-Parameters
-version: 1.0103_01
+version: 1.0104
