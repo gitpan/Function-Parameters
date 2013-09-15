@@ -10,7 +10,7 @@ build_requires:
   strict: 0
   utf8: 0
 dynamic_config: 1
-generated_by: 'ExtUtils::MakeMaker version 6.72, CPAN::Meta::Converter version 2.132140'
+generated_by: 'ExtUtils::MakeMaker version 6.76, CPAN::Meta::Converter version 2.132510'
 license: perl
 meta-spec:
   url: http://module-build.sourceforge.net/META-spec-v1.4.html
@@ -26,5 +26,5 @@ requires:
   perl: 5.014000
   warnings: 0
 resources:
-  repository: git://git.shadowcat.co.uk/p5sagit/Function-Parameters
-version: 1.0202
+  repository: git://github.com/mauke/Function-Parameters
+version: 1.0301

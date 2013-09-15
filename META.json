@@ -4,7 +4,7 @@
       "Lukas Mai <l.mai@web.de>"
    ],
    "dynamic_config" : 1,
-   "generated_by" : "ExtUtils::MakeMaker version 6.72, CPAN::Meta::Converter version 2.132140",
+   "generated_by" : "ExtUtils::MakeMaker version 6.76, CPAN::Meta::Converter version 2.132510",
    "license" : [
       "perl_5"
    ],
@@ -46,9 +46,9 @@
    "resources" : {
       "repository" : {
          "type" : "git",
-         "url" : "git://git.shadowcat.co.uk/p5sagit/Function-Parameters",
-         "web" : "http://git.shadowcat.co.uk/gitweb/gitweb.cgi?p=p5sagit/Function-Parameters.git"
+         "url" : "git://github.com/mauke/Function-Parameters",
+         "web" : "https://github.com/mauke//Function-Parameters"
       }
    },
-   "version" : "1.0202"
+   "version" : "1.0301"
 }
