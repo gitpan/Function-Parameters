@@ -4,7 +4,7 @@
       "Lukas Mai <l.mai@web.de>"
    ],
    "dynamic_config" : 1,
-   "generated_by" : "ExtUtils::MakeMaker version 6.76, CPAN::Meta::Converter version 2.132510",
+   "generated_by" : "ExtUtils::MakeMaker version 6.78, CPAN::Meta::Converter version 2.132661",
    "license" : [
       "perl_5"
    ],
@@ -47,8 +47,8 @@
       "repository" : {
          "type" : "git",
          "url" : "git://github.com/mauke/Function-Parameters",
-         "web" : "https://github.com/mauke//Function-Parameters"
+         "web" : "https://github.com/mauke/Function-Parameters"
       }
    },
-   "version" : "1.0301"
+   "version" : "1.0401"
 }
