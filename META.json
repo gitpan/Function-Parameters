@@ -4,7 +4,7 @@
       "Lukas Mai <l.mai@web.de>"
    ],
    "dynamic_config" : 1,
-   "generated_by" : "ExtUtils::MakeMaker version 6.78, CPAN::Meta::Converter version 2.132661",
+   "generated_by" : "ExtUtils::MakeMaker version 6.98, CPAN::Meta::Converter version 2.140640",
    "license" : [
       "perl_5"
    ],
@@ -22,6 +22,13 @@
    "prereqs" : {
       "build" : {
          "requires" : {}
+      },
+      "configure" : {
+         "requires" : {
+            "ExtUtils::MakeMaker" : "6.48",
+            "strict" : "0",
+            "warnings" : "0"
+         }
       },
       "runtime" : {
          "requires" : {
@@ -50,5 +57,5 @@
          "web" : "https://github.com/mauke/Function-Parameters"
       }
    },
-   "version" : "1.0401"
+   "version" : "1.0402"
 }

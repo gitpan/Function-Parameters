@@ -3,28 +3,32 @@ abstract: 'subroutine definitions with parameter lists'
 author:
   - 'Lukas Mai <l.mai@web.de>'
 build_requires:
-  Dir::Self: 0
-  Test::Fatal: 0
-  Test::More: 0
-  constant: 0
-  strict: 0
-  utf8: 0
+  Dir::Self: '0'
+  Test::Fatal: '0'
+  Test::More: '0'
+  constant: '0'
+  strict: '0'
+  utf8: '0'
+configure_requires:
+  ExtUtils::MakeMaker: '6.48'
+  strict: '0'
+  warnings: '0'
 dynamic_config: 1
-generated_by: 'ExtUtils::MakeMaker version 6.78, CPAN::Meta::Converter version 2.132661'
+generated_by: 'ExtUtils::MakeMaker version 6.98, CPAN::Meta::Converter version 2.140640'
 license: perl
 meta-spec:
   url: http://module-build.sourceforge.net/META-spec-v1.4.html
-  version: 1.4
+  version: '1.4'
 name: Function-Parameters
 no_index:
   directory:
     - t
     - inc
 requires:
-  Carp: 0
-  XSLoader: 0
-  perl: 5.014000
-  warnings: 0
+  Carp: '0'
+  XSLoader: '0'
+  perl: '5.014000'
+  warnings: '0'
 resources:
   repository: git://github.com/mauke/Function-Parameters
-version: 1.0401
+version: '1.0402'
