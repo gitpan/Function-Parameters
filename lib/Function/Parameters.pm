@@ -7,7 +7,7 @@ use Carp qw(confess);
 
 use XSLoader;
 BEGIN {
-    our $VERSION = '1.0503';
+    our $VERSION = '1.0601';
     XSLoader::load;
 }
 
@@ -137,7 +137,10 @@ sub import {
             or confess qq["$clean{name}" doesn't look like a valid name attribute (one of optional, required, prohibited)];
 
         $clean{shift} = delete $type{shift} // '';
-        _assert_valid_identifier $clean{shift}, 1 if $clean{shift};
+        if ($clean{shift}) {
+            _assert_valid_identifier $clean{shift}, 1;
+            $clean{shift} eq '$_' and confess q[Using "$_" as a parameter is not supported];
+        }
 
         $clean{attrs} = join ' ', map delete $type{$_} // (), qw(attributes attrs);
         _assert_valid_attributes $clean{attrs} if $clean{attrs};
@@ -424,8 +427,16 @@ attribute. This syntax is also compatible with C<sub> in perl 5.20 and newer.
 =head3 Parameter list
 
 The parameter list is a list of variables enclosed in parentheses, except it's
-actually a bit more complicated than that. A parameter list can include the
-following 6 parts, all of which are optional:
+actually a bit more complicated than that.
+
+Instead of a full variable name (such as C<$foo> or C<@bar>) you can write just
+the sigil (C<$>, C<@>, or C<%>). This has the effect of creating an unnamed
+parameter, which is useful in functions that are called with a certain number
+of arguments but want to ignore one or more of them. This trick works for
+invocants, slurpies, and positional parameters (see below). You can't have
+unnamed named parameters for what I hope are obvious reasons.
+
+A parameter list can include the following 6 parts, all of which are optional:
 
 =over
 
