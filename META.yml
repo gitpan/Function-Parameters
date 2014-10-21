@@ -31,4 +31,4 @@ requires:
   warnings: '0'
 resources:
   repository: git://github.com/mauke/Function-Parameters
-version: '1.0601'
+version: '1.0602'
