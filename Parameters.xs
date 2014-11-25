@@ -223,6 +223,10 @@ static int my_sv_eq_pvn(pTHX_ SV *sv, const char *p, STRLEN n) {
 #define SvREFCNT_dec_NN(SV) SvREFCNT_dec(SV)
 #endif
 
+#ifndef newMETHOP
+#define newMETHOP newUNOP
+#endif
+
 #include "hax/pad_alloc.c.inc"        /* 5.14 */
 #include "hax/pad_add_name_sv.c.inc"  /* 5.14 */
 #include "hax/pad_add_name_pvs.c.inc" /* 5.14 */
@@ -806,7 +810,7 @@ static OP *mktypecheck(pTHX_ const SV *declarator, int nr, SV *name, PADOFFSET p
                 ? newDEFSVOP()
                 : my_var(aTHX_ 0, padoff)
         );
-        args = op_append_elem(OP_LIST, args, newUNOP(OP_METHOD, 0, mkconstpvs("get_message")));
+        args = op_append_elem(OP_LIST, args, newMETHOP(OP_METHOD, 0, mkconstpvs("get_message")));
 
         msg = args;
         msg->op_type = OP_ENTERSUB;
@@ -832,7 +836,7 @@ static OP *mktypecheck(pTHX_ const SV *declarator, int nr, SV *name, PADOFFSET p
                 ? newDEFSVOP()
                 : my_var(aTHX_ 0, padoff)
         );
-        args = op_append_elem(OP_LIST, args, newUNOP(OP_METHOD, 0, mkconstpvs("check")));
+        args = op_append_elem(OP_LIST, args, newMETHOP(OP_METHOD, 0, mkconstpvs("check")));
 
         chk = args;
         chk->op_type = OP_ENTERSUB;
@@ -2022,7 +2026,7 @@ static int parse_fun(pTHX_ Sentinel sen, OP **pop, const char *keyword_ptr, STRL
         SvREFCNT_inc_simple_void(PL_compcv);
 
         /* close outer block: '}' */
-        block_end(save_ix, body);
+        body = block_end(save_ix, body);
 
         cv = newATTRSUB(
             floor_ix,
